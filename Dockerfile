@@ -1,11 +1,11 @@
 FROM docker.io/gcc
-WORKDIR /build
-COPY src/ /build
-RUN gcc -o mcsv -O2 -Wall -Wextra mcsv.c && \
-    gcc -o mcutil -O2 -Wall -Wextra mcutil.c
+WORKDIR /usr/src/mcsv
+COPY src/ /usr/src/mcsv/src/
+COPY Makefile /usr/src/mcsv/
+RUN make container-build
 
-FROM docker.io/debian:latest
+FROM docker.io/openjdk:8
 WORKDIR /data
-COPY --from=0 /build/mcsv /usr/local/bin/
-COPY --from=0 /build/mcutil /usr/local/bin/
+COPY --from=0 /usr/src/mcsv/mcsv /usr/local/bin/
+COPY --from=0 /usr/src/mcsv/mcutil /usr/local/bin/
 ENTRYPOINT ["mcsv"]

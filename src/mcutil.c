@@ -1,4 +1,7 @@
-/* A helper program for communiating with the socket */
+/* Copyright (c) 2021 Reed Semmel */
+/* SPDX-License-Identifier: MIT */
+
+/* mcutil.c: a helper binary for interacting with the supervisor. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,36 +13,22 @@
 void
 print_usage(void)
 {
-    printf("Usage: mcutil <console|oneshot> [\"oneshot command\"]\n");
+    printf("Usage: mcutil [\"oneshot command\"]\n");
 }
 
 int
 main(int argc, char **argv)
 {
-    int sockfd, len;
+    int sockfd;
+    ssize_t len;
     struct sockaddr_un addr;
     static char buf[1024];
-    
-    enum {
-        CONSOLE,
-        ONESHOT,
-    } mode;
-    
-    if (argc != 2 && argc != 3) {
+
+    if (argc > 2) {
         print_usage();
-        return EXIT_FAILURE;
+        printf("make sure to quote your multi-word command\n");
     }
 
-    if (strcmp(argv[1], "oneshot") == 0) {
-        mode = ONESHOT;
-    } else
-    if (strcmp(argv[1], "console") == 0) {
-        mode = CONSOLE;
-    } else {
-        print_usage();
-        return EXIT_FAILURE;
-    }
-    
     /* connect to the socket */
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     addr.sun_family = AF_UNIX;
@@ -51,28 +40,21 @@ main(int argc, char **argv)
         close(sockfd);
         return EXIT_FAILURE;
     }
-    if (mode == ONESHOT) {
-        if (argc != 3) {
-            printf("no argument provided (did not you quote your multi-word command?)\n");
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-        len = strlen(argv[2]);
-        argv[2][len] = '\n';
-        write(sockfd, argv[2], len);
+    if (argc == 2) {
+        len = strlen(argv[1]);
+        argv[1][len] = '\n';
+        write(sockfd, argv[1], len + 1);
         close(sockfd);
         return EXIT_SUCCESS;
     }
 
-    for (;;) {
-        while (fgets(buf, sizeof(buf) - 1, stdin)) {
-            if (buf[0] < 0x20) break;
-            len = strlen(buf);
-            buf[len] = '\n';
-            write(sockfd, buf, len);
-            if (feof(stdin)) break;
-
+    while (fgets(buf, sizeof(buf), stdin) != NULL) {
+        len = strlen(buf);
+        if (len == 0) {
+            continue;
         }
+        buf[len] = '\n';
+        write(sockfd, buf, len + 1);
     }
     return EXIT_SUCCESS;
 }
