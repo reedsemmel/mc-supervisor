@@ -4,7 +4,7 @@ CC = gcc
 CFLAGS = -O2 -Wall -Wextra
 
 build:
-	podman build -t ghcr.io/reedsemmel/mcsv:dev .
+	podman build -t ghcr.io/reedsemmel/mc-supervisor:dev .
 
 mcsv: src/mcsv.c
 	$(CC) $(CFLAGS) -o $@ $<

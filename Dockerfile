@@ -9,3 +9,4 @@ WORKDIR /data
 COPY --from=0 /usr/src/mcsv/mcsv /usr/local/bin/
 COPY --from=0 /usr/src/mcsv/mcutil /usr/local/bin/
 ENTRYPOINT ["mcsv"]
+LABEL org.opencontainers.image.source https://github.com/reedsemmel/mc-supervisor
