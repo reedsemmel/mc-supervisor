@@ -19,6 +19,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Place the socket in the current directory */
+#define SOCKET_PATH "supervisor.sock"
+
 #define LOG_EMERG(fmt, ...) (void) fprintf(stderr, "[[MCSV]] EMERG: " \
 fmt "\n", ##__VA_ARGS__)
 
@@ -28,8 +31,9 @@ fmt "\n", ##__VA_ARGS__)
 #define LOG_INFO(fmt, ...) (void) fprintf(stderr, "[[MCSV]] INFO: " \
 fmt "\n", ##__VA_ARGS__)
 
+/* Handle signals through an fd instead of through conventional handlers */
 int
-create_signalfd()
+create_signalfd(void)
 {
     int sigfd;
     sigset_t mask;
@@ -40,39 +44,40 @@ create_signalfd()
     (void) sigdelset(&mask, SIGILL);
     (void) sigdelset(&mask, SIGSEGV);
     (void) sigdelset(&mask, SIGTRAP);
-    if (sigprocmask(SIG_BLOCK, &mask, NULL) == -1) {
+    if (sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
         LOG_EMERG("failed to set signal mask");
         return -1;
     }
     sigfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
-    if (sigfd == -1) {
+    if (sigfd < 0) {
         LOG_EMERG("failed to create signalfd: %s", strerror(errno));
     }
     return sigfd;
 }
 
 int
-create_socket()
+create_socket(void)
 {
     int sockfd;
     struct sockaddr_un addr;
 
     addr.sun_family = AF_UNIX;
-    (void) strcpy(addr.sun_path, "/run/mcsv.sock");
+    (void) strcpy(addr.sun_path, SOCKET_PATH);
 
-    /* First the actual socket syscall */
     sockfd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (sockfd == -1) {
+    if (sockfd < 0) {
         LOG_EMERG("failed to create socket: %s", strerror(errno));
         return -1;
     }
 
-    if (bind(sockfd, (struct sockaddr *) &addr, sizeof(addr)) == -1) {
+    if (bind(sockfd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
         LOG_EMERG("bind error: %s", strerror(errno));
         return -1;
     }
 
-    if (listen(sockfd, 10) == -1) {
+    /* We won't be getting a bunch of concurrent connections, so we can keep
+       our footprint low. */
+    if (listen(sockfd, 10) < 0) {
         LOG_EMERG("listen error: %s", strerror(errno));
         return -1;
     }
@@ -86,19 +91,19 @@ create_epoll_fd(int sigfd, int sockfd)
     struct epoll_event event;
 
     epfd = epoll_create1(EPOLL_CLOEXEC);
-    if (epfd == -1) {
+    if (epfd < 0) {
         LOG_EMERG("failed to create epoll: %s", strerror(errno));
         return -1;
     }
     event.data.fd = sigfd;
     event.events = EPOLLIN;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, sigfd, &event) == -1) {
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, sigfd, &event) < 0) {
         LOG_EMERG("failed to add signalfd to epoll: %s", strerror(errno));
         return -1;
     }
     event.data.fd = sockfd;
     event.events = EPOLLIN;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &event) == -1) {
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &event) < 0) {
         LOG_EMERG("failed to add sockfd to epoll: %s", strerror(errno));
         return -1;
     }
@@ -108,7 +113,7 @@ create_epoll_fd(int sigfd, int sockfd)
 int
 create_pipe(int pipefd[2])
 {
-    if (pipe2(pipefd, O_CLOEXEC) == -1) {
+    if (pipe2(pipefd, O_CLOEXEC) < 0) {
         LOG_EMERG("failed to create pipe: %s", strerror(errno));
         return -1;
     }
@@ -120,18 +125,39 @@ exec_child(char **argv, int pipe_stdin)
 {
     /* First reset signal handlers. */
     sigset_t mask;
+    uid_t uid;
+    gid_t gid;
+    const char *uid_env, *gid_env;
+
     (void) sigfillset(&mask);
-    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1) {
+    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0) {
         LOG_WARN("failed to reset signal mask in child: %s", strerror(errno));
     }
 
-    if (dup2(pipe_stdin, STDIN_FILENO) == -1) {
+    if (dup2(pipe_stdin, STDIN_FILENO) < 0) {
         LOG_EMERG("failed to set the child's stdin to the pipe");
     }
 
-    if (setpgid(0, 0) == -1) {
+    if (setpgid(0, 0) < 0) {
         LOG_WARN("failed to put child in new process group: %s",
             strerror(errno));
+    }
+
+    if ((gid_env = getenv("GID"))) {
+        gid = atoi(gid_env);
+        if (setresgid(gid, gid, gid) < 0) {
+            LOG_WARN("failed to set new gid: %s", strerror(errno));
+        }
+    }
+
+    if ((uid_env = getenv("UID"))) {
+        uid = atoi(uid_env);
+        if (chown(".", uid, getegid()) < 0) {
+            LOG_WARN("failed to change ownership of working directory");
+        }
+        if (setresuid(uid, uid, uid) < 0) {
+            LOG_WARN("failed to set new uid: %s", strerror(errno));
+        }
     }
 
     (void) execvp(argv[0], argv);
@@ -142,7 +168,7 @@ exec_child(char **argv, int pipe_stdin)
 }
 
 int
-handle_signal_event(struct epoll_event *event, int child_stdin, pid_t child)
+handle_signal_event(struct epoll_event *event, pid_t child)
 {
     struct signalfd_siginfo buf;
     ssize_t nr_read;
@@ -160,14 +186,14 @@ handle_signal_event(struct epoll_event *event, int child_stdin, pid_t child)
     case SIGHUP:
     case SIGQUIT:
         LOG_INFO("received a signal to stop server...");
-        if (write(child_stdin, "stop\n", 5) == -1) {
-            LOG_WARN("failed to send stop command to server: %s",
-                strerror(errno));
+        /* SIGTERM will gracefully stop the server */
+        if (kill(child, SIGTERM) < 0) {
+            LOG_WARN("failed to signal child: %s", strerror(errno));
         }
         return -1;
     case SIGCHLD:
         pid = waitpid(buf.ssi_pid, NULL, WNOHANG);
-        if (pid == -1) {
+        if (pid < 0) {
             LOG_WARN("failed to waitpid on pid received by SIGCHLD");
             return -1;
         }
@@ -194,7 +220,7 @@ handle_signal_event(struct epoll_event *event, int child_stdin, pid_t child)
             return -1;
         }
     default:
-        LOG_WARN("ignoring received signal %d", (int)buf.ssi_signo);
+        LOG_INFO("ignoring received signal %d", (int)buf.ssi_signo);
         return -1;
     }
 }
@@ -205,13 +231,13 @@ handle_new_connection(struct epoll_event *event, int epfd)
     struct epoll_event new_event;
 
     new_event.data.fd = accept(event->data.fd, NULL, NULL);
-    if (new_event.data.fd == -1) {
+    if (new_event.data.fd < 0) {
         LOG_WARN("error accepting new connection: %s", strerror(errno));
         return -1;
     }
     /* this is all we want to do for now. Just add it to the epoll */
     new_event.events = EPOLLIN | EPOLLRDHUP;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, new_event.data.fd, &new_event) == -1) {
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, new_event.data.fd, &new_event) < 0) {
         LOG_WARN("failed to add new connection to epoll: %s", strerror(errno));
         (void) close(new_event.data.fd);
     }
@@ -226,28 +252,31 @@ handle_connection(struct epoll_event *event, int epfd, int child_stdin)
 
     if (event->events & EPOLLIN) {
         nr_read = recv(event->data.fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
-        if (nr_read == -1) {
+        if (nr_read < 0) {
             LOG_WARN("fail read from socket conn: %s", strerror(errno));
         } else {
-            buf[nr_read] = '\n';
-            nr_read = write(child_stdin, buf, nr_read + 1);
-            if (nr_read == -1) {
+            /* Do not add a newline. That is the client's responsibility */
+            nr_read = write(child_stdin, buf, nr_read);
+            if (nr_read < 0) {
                 LOG_WARN("write error to child's stdin: %s", strerror(errno));
             }
         }
     }
     if (event->events & EPOLLRDHUP) {
-        if (epoll_ctl(epfd, EPOLL_CTL_DEL, event->data.fd, NULL) == -1) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, event->data.fd, NULL) < 0) {
             LOG_WARN("error remove closing connection from epoll: %s",
                 strerror(errno));
         }
-        if (close(event->data.fd) == -1) {
+        if (close(event->data.fd) < 0) {
             LOG_WARN("error closing connection: %s", strerror(errno));
         }
     }
     return -1;
 }
 
+/* The event loop epoll contains fds for signals, the socket, and all socket
+   connections. Each handler function returns -1 on success, or the exit code
+   for which the supervisor shall exit */
 int
 event_loop(int epfd, int sigfd, int sockfd, int child_stdin, pid_t child)
 {
@@ -256,13 +285,13 @@ event_loop(int epfd, int sigfd, int sockfd, int child_stdin, pid_t child)
 
     for (;;) {
         nr_ready = epoll_wait(epfd, events, 16, -1);
-        if (nr_ready == -1) {
+        if (nr_ready < 0) {
             LOG_EMERG("epoll_wait failed: %s", strerror(errno));
             return EXIT_FAILURE;
         }
         for (i = 0; i < nr_ready; i++) {
             if (events[i].data.fd == sigfd) {
-                retval = handle_signal_event(&events[i], child_stdin, child);
+                retval = handle_signal_event(&events[i], child);
             } else
             if (events[i].data.fd == sockfd) {
                 retval = handle_new_connection(&events[i], epfd);
@@ -299,24 +328,24 @@ main(int argc, char **argv)
         LOG_WARN("not running as root");
     }
 
-    if (create_pipe(pipefd) == -1) {
+    if (create_pipe(pipefd) < 0) {
         return EXIT_FAILURE;
     }
 
     sigfd = create_signalfd();
-    if (sigfd == -1) {
+    if (sigfd < 0) {
         retval = EXIT_FAILURE;
         goto close_pipe;
     }
 
     sockfd = create_socket();
-    if (sockfd == -1) {
+    if (sockfd < 0) {
         retval = EXIT_FAILURE;
         goto close_sig;
     }
 
     epfd = create_epoll_fd(sigfd, sockfd);
-    if (epfd == -1) {
+    if (epfd < 0) {
         retval = EXIT_FAILURE;
         goto close_sock;
     }
@@ -338,6 +367,7 @@ close_ep:
 
 close_sock:
     (void) close(sockfd);
+    (void) unlink(SOCKET_PATH);
 
 close_sig:
     (void) close(sigfd);

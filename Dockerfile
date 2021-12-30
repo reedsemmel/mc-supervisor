@@ -4,7 +4,7 @@ COPY src/ /usr/src/mcsv/src/
 COPY Makefile /usr/src/mcsv/
 RUN make container-build
 
-FROM docker.io/openjdk:8
+FROM gcr.io/distroless/java17-debian11
 WORKDIR /data
 COPY --from=0 /usr/src/mcsv/mcsv /usr/local/bin/
 COPY --from=0 /usr/src/mcsv/mcutil /usr/local/bin/

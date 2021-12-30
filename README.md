@@ -1,7 +1,9 @@
 # Minecraft Supervisor
+
 An init process for containers to help run Minecraft Java servers.
 
 ## What does this do?
+
 This utility provides an entry-point for usage in containers running
 Minecraft servers. Minecraft servers can be a little finnicky if run
 directly inside containers as the init process. The program `mcsv` does three
@@ -13,7 +15,7 @@ having to directly attach to its stdin. This utility makes it easy to do
 operation tasks directly from your container orchestrator. For example, using
 `kubectl`:
 ```console
-kubectl exec -it <minecraft-server-container> -- mcutil
+kubectl exec -it <minecraft-server-pod> -- mcutil
 ```
 This will open a write-only shell to send commands to the server. Multiple can
 be open at the same time and not interfere with each other. `stdout` and
@@ -31,19 +33,25 @@ to quote the command if it is more than one word. (example: `mcutil "cmd arg1
 arg2 ..."`).
 
 ## How to use this repository?
+
 I recommend you clone this repo and build the container yourself. For
 convenience, a pre-built image is provided at
-`registry.gitlab.com/renilux/mcsv`. This image is based on
-`docker.io/openjdk:8`, the binaries are in `/usr/local/bin`, has a default
+`ghcr.io/reedsemmel/mcsv`. This image is based on
+Java 17 distroless, the binaries are in `/usr/local/bin`, has a default
 working directory of `/data`, and entry-point `/usr/local/bin/mcsv`. This image
 *does not* have a server jar in it.
 
 The arguments provided to the program will be the command passed to `exec`. An
 example usage:
+
 ```console
-docker run -it --rm registry.gitlab.com/renilux/mcsv:latest java -jar server.jar --nogui
+docker run -it --rm ghcr.io/reedsemmel/mcsv:latest java -jar server.jar nogui
 ```
-You might need to provide the `--nogui` option to prevent it from crashing.
+
+Additionally, you can set the `UID` and `GID` environment variables to drop
+privileges before execing the child.
+
+You might need to provide the `nogui` option to prevent it from crashing.
 
 ***
 

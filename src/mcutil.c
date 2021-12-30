@@ -10,10 +10,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#define SOCKET_PATH "supervisor.sock"
+
 void
 print_usage(void)
 {
-    printf("Usage: mcutil [\"oneshot command\"]\n");
+    (void) printf("Usage: mcutil [\"oneshot command\"]\n");
 }
 
 int
@@ -26,25 +28,25 @@ main(int argc, char **argv)
 
     if (argc > 2) {
         print_usage();
-        printf("make sure to quote your multi-word command\n");
+        (void) printf("make sure to quote your multi-word command\n");
     }
 
     /* connect to the socket */
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, "/run/mcsv.sock");
-    bind(sockfd, (struct sockaddr *) &addr, sizeof(addr));
+    (void) strcpy(addr.sun_path, SOCKET_PATH);
+    (void) bind(sockfd, (struct sockaddr *) &addr, sizeof(addr));
 
     if (connect(sockfd, (struct sockaddr *) &addr, sizeof(addr)) == -1) {
-        printf("failed to connect to the socket.\n");
-        close(sockfd);
+        (void) printf("failed to connect to the socket.\n");
+        (void) close(sockfd);
         return EXIT_FAILURE;
     }
     if (argc == 2) {
         len = strlen(argv[1]);
         argv[1][len] = '\n';
-        write(sockfd, argv[1], len + 1);
-        close(sockfd);
+        (void) write(sockfd, argv[1], len + 1);
+        (void) close(sockfd);
         return EXIT_SUCCESS;
     }
 
@@ -53,8 +55,7 @@ main(int argc, char **argv)
         if (len == 0) {
             continue;
         }
-        buf[len] = '\n';
-        write(sockfd, buf, len + 1);
+        (void) write(sockfd, buf, len);
     }
     return EXIT_SUCCESS;
 }
